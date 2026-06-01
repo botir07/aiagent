@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Delegation — AI Company Simulation</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand-block">
+        <div class="brand-icon">D</div>
+        <div>
+          <p class="brand-label">Delegation</p>
+          <p class="brand-copy">AI-run software company simulation with live agent workflows.</p>
+        </div>
+      </div>
+      <div class="top-status">
+        <div class="status-badge" id="modelStatus"><span class="status-dot"></span> Connecting...</div>
+        <div class="status-summary">
+          <div><span>Provider</span><strong id="statusProvider">Local Model</strong></div>
+          <div><span>Endpoint</span><strong id="statusEndpoint">http://localhost:7352</strong></div>
+          <div><span>Latency</span><strong id="statusLatency">—</strong></div>
+        </div>
+      </div>
+    </header>
+
+    <main class="app-grid">
+      <section class="panel project-panel">
+        <div class="panel-title">Project Brief</div>
+        <label class="field-label">Goal</label>
+        <textarea id="goalInput" placeholder="Create a Telegram CRM using Django, PostgreSQL and Docker."></textarea>
+        <label class="field-label">Requirements</label>
+        <textarea id="requirementsInput" placeholder="Include task automation, agent collaboration, and live workflow visibility."></textarea>
+        <div class="form-row">
+          <label>
+            <span>Project type</span>
+            <select id="typeInput">
+              <option>Product Launch</option>
+              <option>Proof of Concept</option>
+              <option>Enterprise Workflow</option>
+              <option>Custom AI Product</option>
+            </select>
+          </label>
+          <label>
+            <span>Priority</span>
+            <select id="priorityInput">
+              <option>Normal</option>
+              <option>High</option>
+              <option>Urgent</option>
+            </select>
+          </label>
+        </div>
+        <button id="startButton" class="primary-button">Start Project</button>
+        <div class="hint-panel">All agents automatically connect to <strong>http://localhost:7352</strong>. No external AI provider is used.</div>
+      </section>
+
+      <section class="panel workflow-panel">
+        <div class="panel-title">Live Workflow</div>
+        <div class="workflow-status">
+          <div><span>Status</span><strong id="projectStatus">Waiting for project</strong></div>
+          <div><span>Active agent</span><strong id="activeAgent">—</strong></div>
+          <div><span>Requests</span><strong id="requestCount">0</strong></div>
+        </div>
+        <div id="workflowGraph" class="workflow-graph"></div>
+      </section>
+
+      <section class="panel kanban-panel">
+        <div class="panel-title">Task Board</div>
+        <div class="kanban-grid">
+          <div>
+            <h3>Backlog</h3>
+            <div id="column-Backlog" class="kanban-column"></div>
+          </div>
+          <div>
+            <h3>Todo</h3>
+            <div id="column-Todo" class="kanban-column"></div>
+          </div>
+          <div>
+            <h3>In Progress</h3>
+            <div id="column-In Progress" class="kanban-column"></div>
+          </div>
+          <div>
+            <h3>Review</h3>
+            <div id="column-Review" class="kanban-column"></div>
+          </div>
+          <div>
+            <h3>Completed</h3>
+            <div id="column-Completed" class="kanban-column"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel logs-panel">
+        <div class="panel-title">Live Logs</div>
+        <div id="logList" class="log-list"></div>
+      </section>
+
+      <section class="panel inspector-panel">
+        <div class="panel-title">Agent Inspector</div>
+        <div id="agentInspector" class="inspector-card">
+          <p class="placeholder">Click an agent in the workflow or a task on the board to inspect details.</p>
+        </div>
+      </section>
+
+      <section class="panel artifacts-panel">
+        <div class="panel-title">Artifact Explorer</div>
+        <div id="artifactList" class="artifact-list"></div>
+        <pre id="artifactPreview" class="artifact-preview">Select an artifact to preview generated files.</pre>
+      </section>
+
+      <section class="panel monitor-panel">
+        <div class="panel-title">System Monitoring</div>
+        <div class="monitor-grid">
+          <div><span>Active agents</span><strong id="activeAgents">0</strong></div>
+          <div><span>Completed tasks</span><strong id="completedTasks">0</strong></div>
+          <div><span>Failed tasks</span><strong id="failedTasks">0</strong></div>
+          <div><span>Execution time</span><strong id="executionTime">0s</strong></div>
+          <div><span>Model health</span><strong id="healthStatus">Checking...</strong></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

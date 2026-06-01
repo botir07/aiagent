@@ -1,0 +1,283 @@
+# UNIFIED DIFF - ModelRelay Integration Fix
+# File: server.py
+# Changes: 4 major sections + logging infrastructure
+
+## CHANGE 1: Added Logging Infrastructure (Lines 1-20)
+
+--- a/server.py (imports section)
++++ b/server.py (imports section)
+@@ -1,10 +1,20 @@
+ import asyncio
+ import json
++import logging
+ import time
+ import uuid
+ from contextlib import asynccontextmanager
+ from pathlib import Path
+-from typing import Any, Dict, List
++from typing import Any, Dict, List, Optional
+ 
+ import requests
++
++# Configure logging for debugging
++logging.basicConfig(
++    level=logging.INFO,
++    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
++)
++logger = logging.getLogger(__name__)
++
+ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+ from fastapi.responses import FileResponse, JSONResponse
+ from fastapi.staticfiles import StaticFiles
+
+## CHANGE 2: Model Discovery Cache Variables (Lines 21-28)
+
+--- a/server.py
++++ b/server.py
+@@ -16,6 +16,12 @@
+ MODEL_BASE_URL = "http://localhost:7352"
+ MODEL_PATH_PREFIX = ""
+ MODEL_PREFIX_CANDIDATES = ["", "/v1", "/api/v1"]
++
++# Model discovery cache
++CACHED_MODELS: List[str] = []
++CACHED_WORKING_ENDPOINT: str = ""
++CACHE_TIMESTAMP = 0
++CACHE_TTL = 30  # seconds
+ 
+ # Will be initialized after other components
+ model_state = None
+
+## CHANGE 3: Enhanced ModelState Class (Lines 29-52)
+
+--- a/server.py (ModelState.__init__)
++++ b/server.py (ModelState.__init__)
+@@ -27,7 +33,9 @@ class ModelState:
+         self.token_usage = 0
+         self.last_error = ""
+         self.last_checked = 0
+-        self.best_endpoint = "/chat/completions"
++        self.best_endpoint = "/v1/chat/completions"
++        self.available_models: List[str] = []
++        self.selected_model: str = ""
+ 
+     def to_dict(self) -> Dict[str, Any]:
+         return {
+
+--- a/server.py (ModelState.to_dict)
++++ b/server.py (ModelState.to_dict)
+@@ -35,11 +43,14 @@ class ModelState:
+         return {
+             "connected": self.connected,
+             "provider": self.provider,
+             "endpoint": self.endpoint,
+             "best_endpoint": self.best_endpoint,
++            "available_models": self.available_models,
++            "selected_model": self.selected_model,
+             "latency_ms": round(self.latency_ms, 1),
+             "request_count": self.request_count,
+             "token_usage": self.token_usage,
+             "last_error": self.last_error,
+             "last_checked": self.last_checked,
+         }
+
+## CHANGE 4: New Function - get_available_models_sync() (Lines 297-354)
+
+--- a/server.py
++++ b/server.py
+@@ -0,0 +1,58 @@
++
++def get_available_models_sync(base_url: str) -> List[str]:
++    """
++    Fetch available models from ModelRelay /v1/models endpoint.
++    Returns list of model IDs, or empty list if retrieval fails.
++    """
++    global CACHED_MODELS, CACHE_TIMESTAMP
++    
++    # Use cache if fresh
++    if CACHED_MODELS and time.time() - CACHE_TIMESTAMP < CACHE_TTL:
++        logger.debug(f"Using cached models: {CACHED_MODELS}")
++        return CACHED_MODELS
++    
++    models = []
++    base_url = base_url.rstrip("/")
++    
++    for prefix in MODEL_PREFIX_CANDIDATES:
++        candidate_url = base_url.rstrip("/") + normalize_prefix(prefix)
++        models_endpoint = f"{candidate_url}/models"
++        
++        try:
++            logger.info(f"[MODEL DISCOVERY] Fetching models from: {models_endpoint}")
++            response = MODEL_SESSION.get(models_endpoint, timeout=5)
++            
++            logger.info(f"[MODEL DISCOVERY] HTTP {response.status_code} from {models_endpoint}")
++            
++            if response.status_code == 200:
++                try:
++                    data = response.json()
++                    logger.debug(f"[MODEL DISCOVERY] Response: {data}")
++                    
++                    # Handle different response formats
++                    if isinstance(data, dict):
++                        if "data" in data and isinstance(data["data"], list):
++                            # OpenAI format
++                            models = [model.get("id") for model in data["data"] if model.get("id")]
++                        elif "models" in data:
++                            # Alternative format
++                            models = data["models"]
++                    elif isinstance(data, list):
++                        # Direct list format
++                        models = data
++                    
++                    if models:
++                        logger.info(f"[MODEL DISCOVERY] Found models: {models}")
++                        CACHED_MODELS = models
++                        CACHE_TIMESTAMP = time.time()
++                        return models
++                except (json.JSONDecodeError, ValueError) as e:
++                    logger.warning(f"[MODEL DISCOVERY] Failed to parse response: {e}")
++                    continue
++        except requests.exceptions.Timeout:
++            logger.warning(f"[MODEL DISCOVERY] Timeout connecting to {models_endpoint}")
++            continue
++        except requests.exceptions.RequestException as e:
++            logger.warning(f"[MODEL DISCOVERY] Error fetching models: {e}")
++            continue
++    
++    logger.warning("[MODEL DISCOVERY] No models found from any endpoint")
++    return []
+
+## CHANGE 5: New Function - find_working_endpoint_sync() (Lines 358-421)
+
+--- a/server.py
++++ b/server.py
+@@ -0,0 +1,64 @@
++
++def find_working_endpoint_sync(base_url: str, test_model: Optional[str] = None) -> Optional[str]:
++    """
++    Test different endpoint combinations and return the first working one.
++    Tests must return HTTP 200 (not just < 500).
++    
++    Returns the full base URL (with prefix) that works, e.g., "http://localhost:7352/v1"
++    """
++    global CACHED_WORKING_ENDPOINT, CACHE_TIMESTAMP
++    
++    # Use cache if fresh
++    if CACHED_WORKING_ENDPOINT and time.time() - CACHE_TIMESTAMP < CACHE_TTL:
++        logger.debug(f"Using cached endpoint: {CACHED_WORKING_ENDPOINT}")
++        return CACHED_WORKING_ENDPOINT
++    
++    base_url = base_url.rstrip("/")
++    endpoints_to_try = [
++        ("/chat/completions", "chat"),
++        ("/completions", "completion"),
++    ]
++    
++    # Build test payload
++    test_payload = {
++        "model": test_model or "local",
++        "messages": [
++            {"role": "system", "content": "Test"},
++            {"role": "user", "content": "ping"},
++        ],
++        "temperature": 0.0,
++        "max_tokens": 1,
++    }
++    
++    for prefix in MODEL_PREFIX_CANDIDATES:
++        candidate_url = base_url.rstrip("/") + normalize_prefix(prefix)
++        logger.info(f"[ENDPOINT TEST] Testing prefix: {prefix} -> {candidate_url}")
++        
++        for endpoint_path, endpoint_name in endpoints_to_try:
++            full_url = candidate_url + endpoint_path
++            try:
++                logger.info(f"[ENDPOINT TEST] POST {full_url}")
++                start = time.time()
++                response = MODEL_SESSION.post(full_url, json=test_payload, timeout=4)
++                latency = (time.time() - start) * 1000
++                
++                logger.info(f"[ENDPOINT TEST] HTTP {response.status_code} from {full_url} (latency: {latency:.1f}ms)")
++                
++                # Only accept HTTP 200
++                if response.status_code == 200:
++                    logger.info(f"[ENDPOINT TEST] SUCCESS! Working endpoint: {candidate_url}")
++                    CACHED_WORKING_ENDPOINT = candidate_url
++                    CACHE_TIMESTAMP = time.time()
++                    return candidate_url
++                else:
++                    logger.debug(f"[ENDPOINT TEST] HTTP {response.status_code} (not 200, skipping)")
++                    
++            except requests.exceptions.Timeout:
++                logger.debug(f"[ENDPOINT TEST] Timeout: {full_url}")
++            except requests.exceptions.RequestException as e:
++                logger.debug(f"[ENDPOINT TEST] Error: {e}")
++    
++    logger.warning("[ENDPOINT TEST] No working endpoint found")
++    return None
+
+## CHANGE 6: Completely Rewritten - sync_model_request() (Lines 423-533)
+
+--- a/server.py (OLD - 80 lines)
++++ b/server.py (NEW - 110 lines)
+@@ FUNCTION COMPLETELY REPLACED @
+
+OLD CODE (simplified):
+- Used hardcoded "local" model
+- Accepted status_code < 500 as connected
+- Tried 6 different endpoint combinations
+- Generic error messages
+- No logging
+
+NEW CODE:
++ Uses discovered models from get_available_models_sync()
++ Only uses /v1/chat/completions endpoint
++ Only accepts HTTP 200 responses
++ Comprehensive logging with [MODEL REQUEST] tags
++ Detailed error messages with endpoint and model info
++ Logs payload and response for debugging
++ Logs token usage
++ 60-second timeout for model inference
+
+[Full replacement code shown in MODELRELAY_FIX_SUMMARY.md - Lines 423-533]
+
+## CHANGE 7: Completely Rewritten - probe_model_connectivity_sync() (Lines 699-757)
+
+--- a/server.py (OLD - 40 lines)
++++ b/server.py (NEW - 60 lines)
+@@ FUNCTION COMPLETELY REPLACED @
+
+OLD CODE (simplified):
+- Accepted status_code < 500 as connected
+- No model discovery
+- Marked connected even on 404 responses
+- Minimal error handling
+
+NEW CODE:
++ Step 1: Discovers available models
++ Step 2: Finds working endpoint (only HTTP 200)
++ Step 3: Marks as connected
++ Sets available_models in model_state
++ Sets selected_model for use in requests
++ Comprehensive logging with [CONNECTIVITY PROBE] tags
++ Proper error handling
++ Sets MODEL_PATH_PREFIX correctly
+
+[Full replacement code shown in MODELRELAY_FIX_SUMMARY.md - Lines 699-757]
+
+## Summary of Changes
+
+Total Lines Modified: ~400
+Files Changed: 1 (server.py)
+New Functions: 2
+Modified Functions: 2
+New Global Variables: 4 (CACHED_MODELS, CACHED_WORKING_ENDPOINT, CACHE_TIMESTAMP, CACHE_TTL)
+New Modules: 1 (logging)
+Enhanced Classes: 1 (ModelState)
+
+Critical Fixes:
+✅ Only accepts HTTP 200 (not < 500)
+✅ Uses real discovered models (not hardcoded "local")
+✅ Correctly identifies /v1/chat/completions endpoint
+✅ Implements model discovery caching
+✅ Adds comprehensive logging for debugging
+✅ Improves error messages significantly
